@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>D&D Task Prioritizer</title>
+    <title>D&D Task Prioritizer (Web)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
@@ -224,7 +224,7 @@
     <div class="container">
         <div class="form-section">
             <h1 class="text-3xl md:text-4xl">D&D Task Prioritizer</h1>
-            <p id="infoMessage" class="text-sm text-center text-gray-400 mb-4">Your tasks will NOT save when you close or refresh this page.</p>
+            <p id="infoMessage" class="text-sm text-center text-gray-400 mb-4">Your quests will NOT save when you close or refresh this page.</p>
             <div id="messageBox" class="message-box hidden"></div>
 
             <form id="taskForm" class="mb-4">
@@ -260,7 +260,7 @@
     </div>
 
     <script type="module">
-        // Array to store all the tasks (now completely in-memory)
+        // Array to store all the tasks (completely in-memory for this version)
         let tasks = [];
         let nextSuggestedTask = null; // To hold the task currently being suggested
 
@@ -275,7 +275,6 @@
         const diceDisplay = document.getElementById('diceDisplay');
         const nextTaskDisplay = document.getElementById('nextTaskDisplay');
         const messageBox = document.getElementById('messageBox');
-        // Removed userIdDisplay as it's no longer relevant
 
         // Function to display messages to the user
         function showMessage(message, type = 'warning') {
@@ -296,17 +295,18 @@
             } else {
                 noTasksMessage.classList.add('hidden');
                 rollButton.disabled = false; // Enable roll button
-                // Sort tasks for display (in-memory sorting)
-                const sortedTasks = [...tasks].sort((a, b) => {
+                // Sort tasks for display (just for visual order in the list, not prioritization)
+                // The main prioritization happens in determineNextTask
+                const sortedTasksForDisplay = [...tasks].sort((a, b) => {
                     const dateA = new Date(a.deadline);
                     const dateB = new Date(b.deadline);
                     if (dateA.getTime() !== dateB.getTime()) {
-                        return dateA.getTime() - dateB.getTime(); // Sort by deadline
+                        return dateA.getTime() - dateB.getTime();
                     }
-                    return a.pomodoros - b.pomodoros; // Then by pomodoros
+                    return a.pomodoros - b.pomodoros;
                 });
 
-                sortedTasks.forEach(task => {
+                sortedTasksForDisplay.forEach(task => {
                     const taskItem = document.createElement('div');
                     taskItem.className = 'task-item';
                     taskItem.innerHTML = `
@@ -324,10 +324,9 @@
                 // Add event listeners for delete buttons
                 taskListDiv.querySelectorAll('.delete-button').forEach(button => {
                     button.addEventListener('click', (e) => {
-                        const taskId = e.target.dataset.id; // Local ID is used now
-                        // Filter out the task to be deleted
+                        const taskId = e.target.dataset.id;
                         tasks = tasks.filter(task => task.id !== taskId);
-                        renderTasks(); // Re-render the UI with the latest data
+                        renderTasks(); // Re-render the UI
                         // If the deleted task was the currently suggested one, clear the display
                         if (nextSuggestedTask && nextSuggestedTask.id === taskId) {
                             nextTaskDisplay.classList.add('hidden');
@@ -340,13 +339,13 @@
             }
         }
 
-        // Function to add a task (now directly to in-memory array)
+        // Function to add a task (directly to in-memory array)
         taskForm.addEventListener('submit', (e) => {
             e.preventDefault(); // Prevent default form submission
 
             const taskName = taskNameInput.value.trim();
             const pomodoros = parseInt(pomodorosInput.value);
-            const deadline = deadlineInput.value; //YYYY-MM-DD format
+            const deadline = deadlineInput.value; // YYYY-MM-DD format
 
             // Basic validation
             if (!taskName || isNaN(pomodoros) || pomodoros <= 0 || !deadline) {
@@ -368,7 +367,7 @@
                 id: Date.now().toString(), // Simple unique ID for in-memory use
                 name: taskName,
                 pomodoros: pomodoros,
-                deadline: deadline,
+                deadline: deadline, // Store as string for easy display
                 createdAt: new Date().toISOString() // Add a timestamp
             };
 
@@ -406,30 +405,98 @@
             }, 100); // Change dice value every 100ms
         });
 
-        // Function to determine and display the next task
+        // Function to determine and display the next task with enhanced logic
         function determineNextTask() {
-            // Prioritization Logic:
-            // 1. Sort by deadline (earliest first)
-            // 2. If deadlines are the same, sort by pomodoros (fewer first)
-            const sortedTasks = [...tasks].sort((a, b) => {
-                const dateA = new Date(a.deadline);
-                const dateB = new Date(b.deadline);
+            if (tasks.length === 0) {
+                nextTaskDisplay.innerHTML = '<p>No tasks left! Time for a well-deserved rest.</p>';
+                nextTaskDisplay.classList.remove('hidden');
+                diceDisplay.innerHTML = '<span class="text-gray-500">No Quests!</span>';
+                return;
+            }
 
-                // Compare by deadline first
-                if (dateA.getTime() !== dateB.getTime()) {
-                    return dateA.getTime() - dateB.getTime();
+            const today = new Date();
+            today.setHours(0, 0, 0, 0); // Normalize to start of day
+
+            // Create a working copy of tasks to add calculated properties
+            let tasksWithCalculations = tasks.map(task => {
+                const deadlineDate = new Date(task.deadline);
+                deadlineDate.setHours(0, 0, 0, 0); // Normalize deadline to start of day
+
+                const timeDiff = deadlineDate.getTime() - today.getTime();
+                const daysDiff = Math.ceil(timeDiff / (1000 * 60 * 60 * 24)); // Days until deadline (can be negative for overdue)
+
+                let daysOverdue = 0;
+                let daysUntilDeadline = 0;
+
+                if (daysDiff < 0) { // Overdue
+                    daysOverdue = Math.abs(daysDiff);
+                } else { // Today or Future
+                    daysUntilDeadline = daysDiff;
                 }
 
-                // If deadlines are the same, compare by pomodoros
-                return a.pomodoros - b.pomodoros;
+                // Calculate risk factor for future tasks
+                let riskFactor = 0;
+                if (daysUntilDeadline > 0) {
+                    // Higher pomodoros and/or fewer days until deadline = higher risk
+                    // Add 1 to daysUntilDeadline to avoid division by zero and give tasks due tomorrow a higher risk
+                    riskFactor = task.pomodoros / (daysUntilDeadline + 1);
+                }
+
+                return {
+                    ...task,
+                    daysOverdue: daysOverdue,
+                    daysUntilDeadline: daysUntilDeadline,
+                    riskFactor: riskFactor,
+                    deadlineDateObject: deadlineDate // Keep date object for accurate sorting
+                };
             });
 
-            nextSuggestedTask = sortedTasks[0]; // The highest priority task
+            // --- Prioritization Logic ---
+            // 1. Overdue Tasks: Most overdue first, then by shortest pomodoros.
+            const overdueTasks = tasksWithCalculations.filter(task => task.daysOverdue > 0)
+                .sort((a, b) => {
+                    if (a.daysOverdue !== b.daysOverdue) {
+                        return b.daysOverdue - a.daysOverdue; // Descending (most overdue first)
+                    }
+                    return a.pomodoros - b.pomodoros; // Ascending (shortest pomodoros)
+                });
+
+            // 2. Tasks Due Today: Shortest pomodoros first.
+            const dueTodayTasks = tasksWithCalculations.filter(task => task.daysUntilDeadline === 0)
+                .sort((a, b) => a.pomodoros - b.pomodoros); // Ascending (shortest pomodoros)
+
+            // 3. Future Tasks: Prioritized by 'Risk_Factor', then earliest deadline, then shortest pomodoros.
+            const futureTasks = tasksWithCalculations.filter(task => task.daysUntilDeadline > 0)
+                .sort((a, b) => {
+                    if (a.riskFactor !== b.riskFactor) {
+                        return b.riskFactor - a.riskFactor; // Descending (higher risk first)
+                    }
+                    if (a.deadlineDateObject.getTime() !== b.deadlineDateObject.getTime()) {
+                        return a.deadlineDateObject.getTime() - b.deadlineDateObject.getTime(); // Earliest deadline
+                    }
+                    return a.pomodoros - b.pomodoros; // Shortest pomodoros
+                });
+
+            // Concatenate the sorted segments in priority order
+            const prioritizedTasks = [...overdueTasks, ...dueTodayTasks, ...futureTasks];
+
+            nextSuggestedTask = prioritizedTasks[0]; // The highest priority task
 
             if (nextSuggestedTask) {
+                let statusText = "";
+                if (nextSuggestedTask.daysOverdue > 0) {
+                    statusText = `<span class="text-red-400">(OVERDUE by ${nextSuggestedTask.daysOverdue} days!)</span>`;
+                } else if (nextSuggestedTask.daysUntilDeadline === 0) {
+                    statusText = `<span class="text-yellow-400">(DUE TODAY!)</span>`;
+                } else if (nextSuggestedTask.daysUntilDeadline === 1) {
+                    statusText = `(Due tomorrow)`;
+                } else if (nextSuggestedTask.daysUntilDeadline > 1) {
+                    statusText = `(Due in ${nextSuggestedTask.daysUntilDeadline} days)`;
+                }
+
                 nextTaskDisplay.innerHTML = `
                     <p>Your next quest is:</p>
-                    <p class="text-2xl font-bold mt-2">${nextSuggestedTask.name}</p>
+                    <p class="text-2xl font-bold mt-2">${nextSuggestedTask.name} ${statusText}</p>
                     <p class="text-lg mt-1">Estimated: ${nextSuggestedTask.pomodoros} Pomodoros</p>
                     <p class="text-lg">Deadline: ${nextSuggestedTask.deadline}</p>
                     <button id="completeTaskButton" class="w-full mt-4">Mark Quest as Complete</button>
@@ -474,7 +541,7 @@
             let chatHistory = [];
             chatHistory.push({ role: "user", parts: [{ text: prompt }] });
             const payload = { contents: chatHistory };
-            // The apiKey is still provided by the Canvas environment for Gemini API calls
+            // The apiKey is provided by the Canvas environment for Gemini API calls
             const apiKey = "";
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
