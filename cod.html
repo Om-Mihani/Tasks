@@ -6,90 +6,6 @@
     <title>D&D Task Prioritizer</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Global variables for Firebase instances and user ID
-        // These are made available globally via `window.` prefix for the main script to access.
-        window.firebaseApp = null;
-        window.db = null;
-        window.auth = null;
-        window.currentUserId = null;
-        window.isAuthReady = false; // Flag to indicate if authentication is complete
-
-        // This function will be called from the main script once it's ready.
-        // It's defined here in the module scope to ensure Firebase imports are available.
-        window.setupFirebaseAndAuth = async function() {
-            try {
-                // Provide default values for __app_id and __firebase_config for local testing
-                // These will be overridden by the actual environment variables when deployed on Canvas or similar platforms.
-                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-local-app-id';
-                const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-                    apiKey: "dummy-api-key", // Placeholder for local testing
-                    authDomain: "dummy-project.firebaseapp.com",
-                    projectId: "dummy-project",
-                    storageBucket: "dummy-project.appspot.com",
-                    messagingSenderId: "dummy-sender-id",
-                    appId: "dummy-app-id"
-                };
-
-                // Check if firebaseConfig is still empty after attempting to parse __firebase_config
-                if (Object.keys(firebaseConfig).length === 0 || firebaseConfig.apiKey === "dummy-api-key") {
-                    console.warn("Using dummy Firebase configuration for local testing. Data will not persist.");
-                    // Display a user-friendly message about local testing limitations
-                    const tempMessageBox = document.getElementById('messageBox');
-                    if (tempMessageBox) {
-                        tempMessageBox.textContent = "Running locally: Firebase config missing. Tasks will NOT save. Deploy to save quests!";
-                        tempMessageBox.className = "message-box bg-yellow-400 text-gray-800";
-                        tempMessageBox.classList.remove('hidden');
-                    }
-                }
-
-
-                window.firebaseApp = initializeApp(firebaseConfig);
-                window.db = getFirestore(window.firebaseApp);
-                window.auth = getAuth(window.firebaseApp);
-
-                // Listen for auth state changes
-                onAuthStateChanged(window.auth, async (user) => {
-                    if (user) {
-                        window.currentUserId = user.uid;
-                        const userIdDisplay = document.getElementById('userIdDisplay');
-                        if (userIdDisplay) {
-                            userIdDisplay.textContent = `Adventurer ID: ${window.currentUserId}`;
-                        }
-                        window.isAuthReady = true;
-                        console.log("Firebase authenticated. User ID:", window.currentUserId);
-                        // Now that auth is ready, start listening for tasks
-                        // Ensure window.setupTaskListener is defined by the main script
-                        if (typeof window.setupTaskListener === 'function') {
-                            window.setupTaskListener();
-                        } else {
-                            console.warn("window.setupTaskListener is not yet defined. This indicates a script loading order issue.");
-                        }
-                    } else {
-                        // Sign in anonymously if no user is logged in and no custom token
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await signInWithCustomToken(window.auth, __initial_auth_token);
-                        } else {
-                            await signInAnonymously(window.auth);
-                        }
-                    }
-                });
-
-            } catch (error) {
-                console.error("Error initializing Firebase or signing in:", error);
-                const tempMessageBox = document.getElementById('messageBox');
-                if (tempMessageBox) {
-                    tempMessageBox.textContent = "Failed to connect to the quest log. Please try again.";
-                    tempMessageBox.className = "message-box bg-red-400 text-gray-800";
-                    tempMessageBox.classList.remove('hidden');
-                }
-            }
-        };
-    </script>
     <style>
         /* Custom CSS for the dice animation and overall theme */
         body {
@@ -308,7 +224,7 @@
     <div class="container">
         <div class="form-section">
             <h1 class="text-3xl md:text-4xl">D&D Task Prioritizer</h1>
-            <p id="userIdDisplay" class="text-sm text-center text-gray-400 mb-4">Connecting to Quest Log...</p>
+            <p id="infoMessage" class="text-sm text-center text-gray-400 mb-4">Your tasks will NOT save when you close or refresh this page.</p>
             <div id="messageBox" class="message-box hidden"></div>
 
             <form id="taskForm" class="mb-4">
@@ -344,11 +260,8 @@
     </div>
 
     <script type="module">
-        // Import Firebase functions (these are available because the head script is also type="module")
-        import { collection, addDoc, deleteDoc, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Array to store all the tasks (now populated by Firestore)
-        let tasks = []; // This will be updated by the onSnapshot listener
+        // Array to store all the tasks (now completely in-memory)
+        let tasks = [];
         let nextSuggestedTask = null; // To hold the task currently being suggested
 
         // Get references to DOM elements
@@ -362,21 +275,19 @@
         const diceDisplay = document.getElementById('diceDisplay');
         const nextTaskDisplay = document.getElementById('nextTaskDisplay');
         const messageBox = document.getElementById('messageBox');
-        const userIdDisplay = document.getElementById('userIdDisplay');
+        // Removed userIdDisplay as it's no longer relevant
 
         // Function to display messages to the user
-        // Made global so it can be called from the head script during Firebase init
-        window.showMessage = function(message, type = 'warning') {
+        function showMessage(message, type = 'warning') {
             messageBox.textContent = message;
             messageBox.className = `message-box ${type === 'success' ? 'bg-green-400' : type === 'error' ? 'bg-red-400' : 'bg-yellow-400'} text-gray-800`;
             messageBox.classList.remove('hidden');
             setTimeout(() => {
                 messageBox.classList.add('hidden');
             }, 5000); // Hide after 5 seconds
-        };
+        }
 
         // Function to render tasks in the list
-        // This function now relies on the global `tasks` array, which is updated by the Firestore listener.
         function renderTasks() {
             taskListDiv.innerHTML = ''; // Clear existing tasks
             if (tasks.length === 0) {
@@ -412,81 +323,34 @@
 
                 // Add event listeners for delete buttons
                 taskListDiv.querySelectorAll('.delete-button').forEach(button => {
-                    button.addEventListener('click', async (e) => {
-                        const taskId = e.target.dataset.id; // Firestore document ID is a string
-                        if (!window.isAuthReady || !window.db || !window.currentUserId) {
-                            window.showMessage('Cannot remove task. Not connected to quest log.', 'warning');
-                            return;
+                    button.addEventListener('click', (e) => {
+                        const taskId = e.target.dataset.id; // Local ID is used now
+                        // Filter out the task to be deleted
+                        tasks = tasks.filter(task => task.id !== taskId);
+                        renderTasks(); // Re-render the UI with the latest data
+                        // If the deleted task was the currently suggested one, clear the display
+                        if (nextSuggestedTask && nextSuggestedTask.id === taskId) {
+                            nextTaskDisplay.classList.add('hidden');
+                            nextTaskDisplay.innerHTML = '';
+                            nextSuggestedTask = null;
                         }
-                        try {
-                            // Ensure __app_id is available. It's a global variable from the environment.
-                            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-local-app-id'; // Use default for local
-                            const taskDocRef = doc(window.db, `artifacts/${appId}/users/${window.currentUserId}/tasks`, taskId);
-                            await deleteDoc(taskDocRef);
-                            // The onSnapshot listener will automatically re-render tasks
-                            // If the deleted task was the currently suggested one, clear the display
-                            if (nextSuggestedTask && nextSuggestedTask.id === taskId) {
-                                nextTaskDisplay.classList.add('hidden');
-                                nextTaskDisplay.innerHTML = '';
-                                nextSuggestedTask = null;
-                            }
-                            window.showMessage('Quest removed from log.', 'success');
-                        } catch (error) {
-                            console.error("Error deleting task from Firestore:", error);
-                            window.showMessage('Failed to remove quest from log. Please try again.', 'error');
-                        }
+                        showMessage('Quest removed from log.', 'success');
                     });
                 });
             }
         }
 
-        // Function to set up real-time listener for tasks
-        // Made global so it can be called from the head script after auth is ready
-        window.setupTaskListener = function() {
-            if (!window.db || !window.currentUserId) {
-                console.warn("Firestore or User ID not available yet for task listener.");
-                return;
-            }
-
-            // Ensure __app_id is available. It's a global variable from the environment.
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-local-app-id'; // Use default for local
-            // Define the collection path for private user data
-            const tasksCollectionRef = collection(window.db, `artifacts/${appId}/users/${window.currentUserId}/tasks`);
-
-            // Use onSnapshot to listen for real-time updates
-            // Note: orderBy is commented out as per instructions to avoid index issues.
-            // Sorting will be done in memory.
-            onSnapshot(tasksCollectionRef, (snapshot) => {
-                const fetchedTasks = [];
-                snapshot.forEach(doc => {
-                    fetchedTasks.push({ id: doc.id, ...doc.data() });
-                });
-                // Update the local `tasks` array
-                tasks = fetchedTasks;
-                renderTasks(); // Re-render the UI with the latest data
-                console.log("Tasks updated from Firestore:", tasks);
-            }, (error) => {
-                console.error("Error fetching tasks from Firestore:", error);
-                window.showMessage("Failed to load quests from the log. Check your connection.", "error");
-            });
-        };
-
-        // Function to add a task to Firestore
-        taskForm.addEventListener('submit', async (e) => {
+        // Function to add a task (now directly to in-memory array)
+        taskForm.addEventListener('submit', (e) => {
             e.preventDefault(); // Prevent default form submission
-
-            if (!window.isAuthReady || !window.db || !window.currentUserId) {
-                window.showMessage('Connecting to quest log... Please wait a moment.', 'warning');
-                return;
-            }
 
             const taskName = taskNameInput.value.trim();
             const pomodoros = parseInt(pomodorosInput.value);
-            const deadline = deadlineInput.value; //AAPL-MM-DD format
+            const deadline = deadlineInput.value; //YYYY-MM-DD format
 
             // Basic validation
             if (!taskName || isNaN(pomodoros) || pomodoros <= 0 || !deadline) {
-                window.showMessage('Please fill in all fields correctly. Pomodoros must be a positive number.', 'warning');
+                showMessage('Please fill in all fields correctly. Pomodoros must be a positive number.', 'warning');
                 return;
             }
 
@@ -496,35 +360,28 @@
             selectedDeadline.setHours(0, 0, 0, 0); // Normalize to start of day
 
             if (selectedDeadline < today) {
-                window.showMessage('Deadline cannot be in the past. Please choose a future date.', 'warning');
+                showMessage('Deadline cannot be in the past. Please choose a future date.', 'warning');
                 return;
             }
 
             const newTask = {
+                id: Date.now().toString(), // Simple unique ID for in-memory use
                 name: taskName,
                 pomodoros: pomodoros,
                 deadline: deadline,
                 createdAt: new Date().toISOString() // Add a timestamp
             };
 
-            try {
-                // Ensure __app_id is available. It's a global variable from the environment.
-                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-local-app-id'; // Use default for local
-                // Add the new task to Firestore
-                const tasksCollectionRef = collection(window.db, `artifacts/${appId}/users/${window.currentUserId}/tasks`);
-                await addDoc(tasksCollectionRef, newTask);
-                taskForm.reset(); // Clear the form
-                window.showMessage('Quest added to your log!', 'success');
-            } catch (error) {
-                console.error("Error adding task to Firestore:", error);
-                window.showMessage('Failed to add quest to log. Please try again.', 'error');
-            }
+            tasks.push(newTask); // Add to local array
+            renderTasks(); // Re-render the UI
+            taskForm.reset(); // Clear the form
+            showMessage('Quest added to your log!', 'success');
         });
 
         // Function to "roll the dice" and determine the next task
         rollButton.addEventListener('click', () => {
             if (tasks.length === 0) {
-                window.showMessage('No quests to roll for! Add some tasks first.', 'warning');
+                showMessage('No quests to roll for! Add some tasks first.', 'warning');
                 return;
             }
 
@@ -583,26 +440,15 @@
                 diceDisplay.innerHTML = '<span class="text-gray-500">Quest Selected!</span>'; // Clear dice display
 
                 // Add event listener for "Mark Complete" button
-                document.getElementById('completeTaskButton').addEventListener('click', async () => {
-                    if (!window.isAuthReady || !window.db || !window.currentUserId) {
-                        window.showMessage('Cannot complete task. Not connected to quest log.', 'warning');
-                        return;
-                    }
-                    try {
-                        // Ensure __app_id is available. It's a global variable from the environment.
-                        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-local-app-id'; // Use default for local
-                        const taskDocRef = doc(window.db, `artifacts/${appId}/users/${window.currentUserId}/tasks`, nextSuggestedTask.id);
-                        await deleteDoc(taskDocRef);
-                        // The onSnapshot listener will automatically re-render tasks
-                        nextTaskDisplay.classList.add('hidden'); // Hide the suggested task display
-                        nextTaskDisplay.innerHTML = ''; // Clear content
-                        nextSuggestedTask = null; // Reset suggested task
-                        diceDisplay.innerHTML = '<span class="text-gray-500">?</span>'; // Reset dice display
-                        window.showMessage('Quest completed! Well done, adventurer!', 'success');
-                    } catch (error) {
-                        console.error("Error completing task in Firestore:", error);
-                        window.showMessage('Failed to mark quest as complete. Please try again.', 'error');
-                    }
+                document.getElementById('completeTaskButton').addEventListener('click', () => {
+                    // Remove the task from the local array
+                    tasks = tasks.filter(task => task.id !== nextSuggestedTask.id);
+                    renderTasks(); // Re-render the UI
+                    nextTaskDisplay.classList.add('hidden'); // Hide the suggested task display
+                    nextTaskDisplay.innerHTML = ''; // Clear content
+                    nextSuggestedTask = null; // Reset suggested task
+                    diceDisplay.innerHTML = '<span class="text-gray-500">?</span>'; // Reset dice display
+                    showMessage('Quest completed! Well done, adventurer!', 'success');
                 });
 
                 // Add event listener for "Generate Quest Lore" button
@@ -617,7 +463,7 @@
             }
         }
 
-        // ✨ New Function: Generate Quest Lore using Gemini API
+        // ✨ Generate Quest Lore using Gemini API (This part remains as before)
         async function generateQuestLore(taskName) {
             const questLoreDisplay = document.getElementById('questLoreDisplay');
             questLoreDisplay.classList.remove('hidden');
@@ -628,7 +474,8 @@
             let chatHistory = [];
             chatHistory.push({ role: "user", parts: [{ text: prompt }] });
             const payload = { contents: chatHistory };
-            const apiKey = ""; // Leave this as-is; Canvas will provide the API key at runtime
+            // The apiKey is still provided by the Canvas environment for Gemini API calls
+            const apiKey = "";
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
             try {
@@ -657,19 +504,13 @@
             } catch (error) {
                 console.error("Error calling Gemini API:", error);
                 questLoreDisplay.innerHTML = '<p>Error generating lore. The magic failed. Try again!</p>';
-                window.showMessage('Failed to generate quest lore. Please check console for details.', 'error');
+                showMessage('Failed to generate quest lore. Please check console for details.', 'error');
             }
         }
 
-        // Initial setup on DOMContentLoaded
+        // Initial rendering of tasks (empty, as no persistence)
         document.addEventListener('DOMContentLoaded', () => {
-            // Call the Firebase setup function defined in the head script
-            if (typeof window.setupFirebaseAndAuth === 'function') {
-                window.setupFirebaseAndAuth();
-            } else {
-                console.error("Firebase setup function not found. Script loading order issue.");
-                window.showMessage("Critical error: Firebase setup not initialized. Please refresh.", "error");
-            }
+            renderTasks();
         });
     </script>
 </body>
